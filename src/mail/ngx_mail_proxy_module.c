@@ -367,55 +367,15 @@ ngx_mail_proxy_imap_handler(ngx_event_t *rev)
 
         s->connection->log->action = "sending LOGIN command to upstream";
 
-        line.len = s->tag.len + sizeof("LOGIN ") - 1
-                   + 1 + NGX_SIZE_T_LEN + 1 + 2;
+        line.len = s->tag.len + sizeof("LOGIN ") + s->login.len + 1 + s->passwd.len +2;
         line.data = ngx_pnalloc(c->pool, line.len);
         if (line.data == NULL) {
             ngx_mail_proxy_internal_server_error(s);
             return;
         }
-
-        line.len = ngx_sprintf(line.data, "%VLOGIN {%uz}" CRLF,
-                               &s->tag, s->login.len)
-                   - line.data;
-
-        s->mail_state = ngx_imap_login;
-        break;
-
-    case ngx_imap_login:
-        ngx_log_debug0(NGX_LOG_DEBUG_MAIL, rev->log, 0, "mail proxy send user");
-
-        s->connection->log->action = "sending user name to upstream";
-
-        line.len = s->login.len + 1 + 1 + NGX_SIZE_T_LEN + 1 + 2;
-        line.data = ngx_pnalloc(c->pool, line.len);
-        if (line.data == NULL) {
-            ngx_mail_proxy_internal_server_error(s);
-            return;
-        }
-
-        line.len = ngx_sprintf(line.data, "%V {%uz}" CRLF,
-                               &s->login, s->passwd.len)
-                   - line.data;
-
-        s->mail_state = ngx_imap_user;
-        break;
-
-    case ngx_imap_user:
-        ngx_log_debug0(NGX_LOG_DEBUG_MAIL, rev->log, 0,
-                       "mail proxy send passwd");
-
-        s->connection->log->action = "sending password to upstream";
-
-        line.len = s->passwd.len + 2;
-        line.data = ngx_pnalloc(c->pool, line.len);
-        if (line.data == NULL) {
-            ngx_mail_proxy_internal_server_error(s);
-            return;
-        }
-
-        p = ngx_cpymem(line.data, s->passwd.data, s->passwd.len);
-        *p++ = CR; *p = LF;
+        line.len = ngx_sprintf(line.data, "%VLOGIN %V %V" CRLF,
+                &s->tag, &s->login, &s->passwd)
+            - line.data;
 
         s->mail_state = ngx_imap_passwd;
         break;
