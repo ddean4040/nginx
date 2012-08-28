@@ -335,7 +335,6 @@ ngx_mail_proxy_pop3_handler(ngx_event_t *rev)
 static void
 ngx_mail_proxy_imap_handler(ngx_event_t *rev)
 {
-    u_char                 *p;
     ngx_int_t               rc;
     ngx_str_t               line;
     ngx_connection_t       *c;
