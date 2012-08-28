@@ -176,10 +176,15 @@ typedef enum {
     ngx_smtp_auth_cram_md5,
     ngx_smtp_helo,
     ngx_smtp_helo_xclient,
+    ngx_smtp_helo_login,
     ngx_smtp_helo_from,
     ngx_smtp_xclient,
     ngx_smtp_xclient_from,
     ngx_smtp_xclient_helo,
+    ngx_smtp_login,
+    ngx_smtp_user,
+    ngx_smtp_passwd_xclient,
+    ngx_smtp_passwd_helo,
     ngx_smtp_from,
     ngx_smtp_to
 } ngx_smtp_state_e;
