@@ -1,0 +1,6 @@
+This repo is for nginx patched with enhancements for mail proxying:
+
+SMTP Authentication pass-thru (http://answerpot.com/showthread.php?3467364-pass+smtp+authentication+upstream)
+Single-line IMAP LOGIN (http://www.patlathem.com/2011/08/removing-nginx-command-continuation-from-imap-logins/)
+
+All credit to the original authors of nginx and these patches
