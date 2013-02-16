@@ -134,6 +134,9 @@ static char *ngx_http_upstream(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy);
 static char *ngx_http_upstream_server(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
 
+static ngx_addr_t *ngx_http_upstream_get_local(ngx_http_request_t *r,
+    ngx_http_upstream_local_t *local);
+
 static void *ngx_http_upstream_create_main_conf(ngx_conf_t *cf);
 static char *ngx_http_upstream_init_main_conf(ngx_conf_t *cf, void *conf);
 
@@ -507,7 +510,7 @@ ngx_http_upstream_init_request(ngx_http_request_t *r)
         return;
     }
 
-    u->peer.local = u->conf->local;
+    u->peer.local = ngx_http_upstream_get_local(r, u->conf->local);
 
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
@@ -4121,6 +4124,7 @@ ngx_http_upstream(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
     value = cf->args->elts;
     u.host = value[1];
     u.no_resolve = 1;
+    u.no_port = 1;
 
     uscf = ngx_http_upstream_add(cf, &u, NGX_HTTP_UPSTREAM_CREATE
                                          |NGX_HTTP_UPSTREAM_WEIGHT
@@ -4391,14 +4395,14 @@ ngx_http_upstream_add(ngx_conf_t *cf, ngx_url_t *u, ngx_uint_t flags)
             return NULL;
         }
 
-        if ((uscfp[i]->flags & NGX_HTTP_UPSTREAM_CREATE) && u->port) {
+        if ((uscfp[i]->flags & NGX_HTTP_UPSTREAM_CREATE) && !u->no_port) {
             ngx_conf_log_error(NGX_LOG_WARN, cf, 0,
                                "upstream \"%V\" may not have port %d",
                                &u->host, u->port);
             return NULL;
         }
 
-        if ((flags & NGX_HTTP_UPSTREAM_CREATE) && uscfp[i]->port) {
+        if ((flags & NGX_HTTP_UPSTREAM_CREATE) && !uscfp[i]->no_port) {
             ngx_log_error(NGX_LOG_WARN, cf->log, 0,
                           "upstream \"%V\" may not have port %d in %s:%ui",
                           &u->host, uscfp[i]->port,
@@ -4406,7 +4410,9 @@ ngx_http_upstream_add(ngx_conf_t *cf, ngx_url_t *u, ngx_uint_t flags)
             return NULL;
         }
 
-        if (uscfp[i]->port != u->port) {
+        if (uscfp[i]->port && u->port
+            && uscfp[i]->port != u->port)
+        {
             continue;
         }
 
@@ -4434,6 +4440,7 @@ ngx_http_upstream_add(ngx_conf_t *cf, ngx_url_t *u, ngx_uint_t flags)
     uscf->line = cf->conf_file->line;
     uscf->port = u->port;
     uscf->default_port = u->default_port;
+    uscf->no_port = u->no_port;
 
     if (u->naddrs == 1) {
         uscf->servers = ngx_array_create(cf->pool, 1,
@@ -4470,24 +4477,63 @@ ngx_http_upstream_bind_set_slot(ngx_conf_t *cf, ngx_command_t *cmd,
 {
     char  *p = conf;
 
-    ngx_int_t     rc;
-    ngx_str_t    *value;
-    ngx_addr_t  **paddr;
+    ngx_int_t                           rc;
+    ngx_str_t                          *value;
+    ngx_http_complex_value_t            cv;
+    ngx_http_upstream_local_t         **plocal, *local;
+    ngx_http_compile_complex_value_t    ccv;
 
-    paddr = (ngx_addr_t **) (p + cmd->offset);
+    plocal = (ngx_http_upstream_local_t **) (p + cmd->offset);
 
-    *paddr = ngx_palloc(cf->pool, sizeof(ngx_addr_t));
-    if (*paddr == NULL) {
-        return NGX_CONF_ERROR;
+    if (*plocal != NGX_CONF_UNSET_PTR) {
+        return "is duplicate";
     }
 
     value = cf->args->elts;
 
-    rc = ngx_parse_addr(cf->pool, *paddr, value[1].data, value[1].len);
+    if (ngx_strcmp(value[1].data, "off") == 0) {
+        *plocal = NULL;
+        return NGX_CONF_OK;
+    }
+
+    ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
+
+    ccv.cf = cf;
+    ccv.value = &value[1];
+    ccv.complex_value = &cv;
+
+    if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
+        return NGX_CONF_ERROR;
+    }
+
+    local = ngx_pcalloc(cf->pool, sizeof(ngx_http_upstream_local_t));
+    if (local == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    *plocal = local;
+
+    if (cv.lengths) {
+        local->value = ngx_palloc(cf->pool, sizeof(ngx_http_complex_value_t));
+        if (local->value == NULL) {
+            return NGX_CONF_ERROR;
+        }
+
+        *local->value = cv;
+
+        return NGX_CONF_OK;
+    }
+
+    local->addr = ngx_palloc(cf->pool, sizeof(ngx_addr_t));
+    if (local->addr == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    rc = ngx_parse_addr(cf->pool, local->addr, value[1].data, value[1].len);
 
     switch (rc) {
     case NGX_OK:
-        (*paddr)->name = value[1];
+        local->addr->name = value[1];
         return NGX_CONF_OK;
 
     case NGX_DECLINED:
@@ -4497,6 +4543,53 @@ ngx_http_upstream_bind_set_slot(ngx_conf_t *cf, ngx_command_t *cmd,
 
     default:
         return NGX_CONF_ERROR;
+    }
+}
+
+
+static ngx_addr_t *
+ngx_http_upstream_get_local(ngx_http_request_t *r,
+    ngx_http_upstream_local_t *local)
+{
+    ngx_int_t    rc;
+    ngx_str_t    val;
+    ngx_addr_t  *addr;
+
+    if (local == NULL) {
+        return NULL;
+    }
+
+    if (local->value == NULL) {
+        return local->addr;
+    }
+
+    if (ngx_http_complex_value(r, local->value, &val) != NGX_OK) {
+        return NULL;
+    }
+
+    if (val.len == 0) {
+        return NULL;
+    }
+
+    addr = ngx_palloc(r->pool, sizeof(ngx_addr_t));
+    if (addr == NULL) {
+        return NULL;
+    }
+
+    rc = ngx_parse_addr(r->pool, addr, val.data, val.len);
+
+    switch (rc) {
+    case NGX_OK:
+        addr->name = val;
+        return addr;
+
+    case NGX_DECLINED:
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "invalid local address \"%V\"", &val);
+        /* fall through */
+
+    default:
+        return NULL;
     }
 }
 
